@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import json
-import time
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 
@@ -8,8 +7,8 @@ API_CHANNELS_URL = "https://core-api.kablowebtv.com/api/channels"
 
 def generate_m3u():
     try:
-        print("🌐 Tarayıcı başlatılıyor ve tvheryerde.com açılıyor...")
-        captured_headers = None
+        print("🌐 Tarayıcı başlatılıyor...")
+        captured_json = None
         
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -17,56 +16,52 @@ def generate_m3u():
                 args=['--disable-blink-features=AutomationControlled']
             )
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                extra_http_headers={
-                    "Referer": "https://tvheryerde.com",
-                    "Origin": "https://tvheryerde.com"
-                }
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             )
             page = context.new_page()
             
-            # 1. Sitenin core-api'ye attığı ilk başarılı isteğin TÜM header'larını yakala
-            def handle_request(request):
-                nonlocal captured_headers
-                if "core-api.kablowebtv.com" in request.url and not captured_headers:
-                    headers = request.headers
-                    if "authorization" in headers:
-                        captured_headers = headers
-                        print("🔑 [DEBUG] Orijinal API istek header'ları ve taze token başarıyla yakalandı!")
-
-            page.on("request", handle_request)
-
-            # Sayfaya git
-            print("🌐 Sayfa yükleniyor...")
+            # 1. Önce ana sayfaya gidip oturumun/çerezlerin oluşmasını sağlıyoruz
+            print("🌐 tvheryerde.com ana sayfasına bağlanılıyor...")
             page.goto("https://tvheryerde.com", timeout=60000)
+            page.wait_for_timeout(5000) # Oturumun oturması için bekle
             
-            # Header'ların yakalanması için kısa bir süre bekle
-            start_time = time.time()
-            while not captured_headers and time.time() - start_time < 15:
-                page.wait_for_timeout(500)
-                
-            if not captured_headers:
-                raise ValueError("API istek header'ları (Authorization vb.) yakalanamadı!")
+            # 2. Ağ trafiğinden /api/channels isteğinin JSON yanıtını direkt yakalayalım
+            def handle_response(response):
+                nonlocal captured_json
+                if "/api/channels" in response.url:
+                    try:
+                        data = response.json()
+                        if data.get('IsSucceeded'):
+                            captured_json = data
+                            print("🎯 [DEBUG] Channels API verisi doğrudan yakalandı!")
+                    except Exception:
+                        pass
+
+            page.on("response", handle_response)
+
+            # 3. Şimdi doğrudan API adresine giderek sitenin kendi oturumuyla tetiklenmesini sağlıyoruz
+            print("📡 Doğrudan API adresine gidiliyor...")
+            page.goto(API_CHANNELS_URL, timeout=30000)
+            page.wait_for_timeout(3000)
             
-            print("📡 Yakalanan orijinal headerlar ile /api/channels adresine istek atılıyor...")
-            
-            # 2. Sitenin kendi kullandığı tüm orijinal header'ları fetch içine vererek kanalları çek
-            api_response = page.evaluate("""async ({ url, reqHeaders }) => {
-                const res = await fetch(url, {
-                    method: 'GET',
-                    headers: reqHeaders
-                });
-                return await res.json();
-            }""", {"url": API_CHANNELS_URL, "reqHeaders": captured_headers})
+            # Eğer yukarıdaki yakalamazsa, sayfanın body'sindeki metni JSON olarak almayı deneyelim
+            if not captured_json:
+                try:
+                    body_text = page.inner_text("body")
+                    parsed = json.loads(body_text)
+                    if parsed.get('IsSucceeded'):
+                        captured_json = parsed
+                        print("🎯 [DEBUG] API verisi sayfa içeriğinden okundu!")
+                except Exception:
+                    pass
             
             browser.close()
             
-        data = api_response
+        if not captured_json or not captured_json.get('Data', {}).get('AllChannels'):
+            raise ValueError("API'den geçerli kanal verisi alınamadı.")
         
-        if not data or not data.get('IsSucceeded') or not data.get('Data', {}).get('AllChannels'):
-            raise ValueError(f"API'den geçerli veri alınamadı. Yanıt: {str(data)[:150]}")
-        
-        print("✅ Kanallar başarıyla alındı, M3U oluşturuluyor...")
+        data = captured_json
+        print("✅ Kanallar işleniyor, M3U oluşturuluyor...")
         
         m3u_lines = ["#EXTM3U"]
         for channel in data['Data']['AllChannels']:
