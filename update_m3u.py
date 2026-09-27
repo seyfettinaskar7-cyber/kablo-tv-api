@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json
+import time
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 
@@ -10,8 +11,6 @@ def generate_m3u():
         print("🌐 Tarayıcı başlatılıyor ve tvheryerde.com açılıyor...")
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
-            
-            # Context oluşturulurken desteklenmeyen 'referer' kaldırıldı
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
                 extra_http_headers={
@@ -21,51 +20,49 @@ def generate_m3u():
             )
             page = context.new_page()
             
-            # --- DEBUG / YAKALAMA MEKANİZMASI ---
             captured_token = None
             
+            # Ağ trafiğini dinleyip token'ı yakalayan fonksiyon
             def handle_route(route, request):
                 nonlocal captured_token
                 if "core-api.kablowebtv.com" in request.url:
-                    headers = request.headers
-                    auth_header = headers.get("authorization", "")
-                    
-                    print(f"\n--- [DEBUG] İstek Atılan URL: {request.url} ---")
-                    
+                    auth_header = request.headers.get("authorization", "")
                     if auth_header.startswith("Bearer "):
-                        captured_token = auth_header.replace("Bearer ", "")
-                        print(f"🎯 [DEBUG] Başarıyla Yakalanan Token:\n{captured_token}\n")
-                        
-                        parts = captured_token.split('.')
-                        if len(parts) == 3:
-                            print("✅ [DEBUG] Bu geçerli bir JWT formatıdır.")
-                        else:
-                            print("⚠️ [DEBUG] Uyarı: Token standart JWT yapısında değil!")
-                    else:
-                        print("⚠️ [DEBUG] İstekte Authorization Bearer başlığı bulunamadı!")
-                        
+                        token_val = auth_header.replace("Bearer ", "")
+                        if not captured_token: # İlk yakalananı al
+                            captured_token = token_val
+                            print(f"🎯 [DEBUG] Ağ trafiğinden taze JWT Token yakalandı!")
                 route.continue_()
 
             context.route("**/*", handle_route)
-            # ------------------------------------
 
-            # Sayfaya git ve API isteklerinin tetiklenmesini bekle
+            # Sayfaya git
             page.goto("https://tvheryerde.com", timeout=60000)
-            page.wait_for_timeout(6000)
             
-            print("📡 Tarayıcı üzerinden Kanallar API'sine istek atılıyor...")
+            # Token'ın ağ trafiğinde belirmesi için birkaç saniye bekle
+            print("⏳ Token'ın ağ trafiğinde oluşması bekleniyor...")
+            start_time = time.time()
+            while not captured_token and time.time() - start_time < 15:
+                page.wait_for_timeout(500)
             
-            api_response = page.evaluate("""async (url) => {
+            if not captured_token:
+                raise ValueError("Ağ trafiğinden Bearer token yakalanamadı!")
+            
+            print(f"✅ Yakalanan Token ile Kanallar API'sine istek atılıyor...")
+            
+            # Yakalanan gerçek token'ı fetch isteğinin içine Authorization olarak ekliyoruz
+            api_response = page.evaluate("""async ({ url, token }) => {
                 const res = await fetch(url, {
                     method: 'GET',
                     headers: {
                         'Accept': 'application/json',
+                        'Authorization': 'Bearer ' + token,
                         'Origin': 'https://tvheryerde.com',
                         'Referer': 'https://tvheryerde.com'
                     }
                 });
                 return await res.json();
-            }""", API_URL)
+            }""", {"url": API_URL, "token": captured_token})
             
             browser.close()
             
