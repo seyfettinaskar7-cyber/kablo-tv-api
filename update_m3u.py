@@ -10,9 +10,14 @@ def generate_m3u():
         print("🌐 Tarayıcı başlatılıyor ve tvheryerde.com açılıyor...")
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
+            
+            # Context oluşturulurken desteklenmeyen 'referer' kaldırıldı
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
-                referer="https://tvheryerde.com"
+                extra_http_headers={
+                    "Referer": "https://tvheryerde.com",
+                    "Origin": "https://tvheryerde.com"
+                }
             )
             page = context.new_page()
             
@@ -21,30 +26,26 @@ def generate_m3u():
             
             def handle_route(route, request):
                 nonlocal captured_token
-                # KabloTV API isteklerini yakala ve logla
                 if "core-api.kablowebtv.com" in request.url:
                     headers = request.headers
                     auth_header = headers.get("authorization", "")
                     
                     print(f"\n--- [DEBUG] İstek Atılan URL: {request.url} ---")
-                    print(f"--- [DEBUG] Tüm Headerlar: {json.dumps(headers, indent=2)} ---")
                     
                     if auth_header.startswith("Bearer "):
                         captured_token = auth_header.replace("Bearer ", "")
                         print(f"🎯 [DEBUG] Başarıyla Yakalanan Token:\n{captured_token}\n")
                         
-                        # JWT Doğrulama (Nokta sayısından kontrol)
                         parts = captured_token.split('.')
                         if len(parts) == 3:
-                            print("✅ [DEBUG] Bu geçerli bir JWT formatıdır (3 parçadan oluşuyor).")
+                            print("✅ [DEBUG] Bu geçerli bir JWT formatıdır.")
                         else:
-                            print("⚠️ [DEBUG] Uyarı: Token standart JWT yapısında görünmüyor!")
+                            print("⚠️ [DEBUG] Uyarı: Token standart JWT yapısında değil!")
                     else:
                         print("⚠️ [DEBUG] İstekte Authorization Bearer başlığı bulunamadı!")
                         
                 route.continue_()
 
-            # Tüm ağ trafiğini yukarıdaki fonksiyonla dinle
             context.route("**/*", handle_route)
             # ------------------------------------
 
@@ -54,7 +55,6 @@ def generate_m3u():
             
             print("📡 Tarayıcı üzerinden Kanallar API'sine istek atılıyor...")
             
-            # Tarayıcı içinde fetch kullanarak veriyi çek
             api_response = page.evaluate("""async (url) => {
                 const res = await fetch(url, {
                     method: 'GET',
