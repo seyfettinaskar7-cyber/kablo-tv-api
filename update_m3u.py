@@ -1,69 +1,108 @@
 #!/usr/bin/env python3
 import json
+import time
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 
+API_CHANNELS_URL = "https://core-api.kablowebtv.com/api/channels"
+
 def generate_m3u():
     try:
-        print("🌐 Tarayıcı başlatılıyor ve tvheryerde.com açılıyor...")
-        captured_api_data = None
+        print("🌐 Gerçekçi tarayıcı profili başlatılıyor ve tvheryerde.com açılıyor...")
+        captured_headers = None
         
         with sync_playwright() as p:
+            # Bot korumalarını atlamak için gelişmiş başlatma argümanları
             browser = p.chromium.launch(
                 headless=True,
-                args=['--disable-blink-features=AutomationControlled']
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-accelerated-2d-canvas',
+                    '--disable-gpu'
+                ]
             )
+            
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+                viewport={"width": 1920, "height": 1080},
+                locale="tr-TR",
+                timezone_id="Europe/Istanbul",
                 extra_http_headers={
                     "Referer": "https://tvheryerde.com/",
-                    "Origin": "https://tvheryerde.com"
+                    "Origin": "https://tvheryerde.com",
+                    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
                 }
             )
+            
+            # --- GERÇEK KULLANICI PARMAK İZİ (STEALTH) ENJEKSİYONU ---
+            context.add_init_script("""
+                // webdriver bayrağını gizle
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+                
+                // Chrome nesnesini taklit et
+                window.navigator.chrome = {
+                    runtime: {}
+                };
+                
+                // Dil ve eklentileri gerçekçi göster
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['tr-TR', 'tr', 'en-US', 'en']
+                });
+                
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+            """)
+            # ---------------------------------------------------------
+            
             page = context.new_page()
             
-            # Ağ trafiğindeki yanıtları dinle
-            def handle_response(response):
-                nonlocal captured_api_data
-                if "/api/channels" in response.url:
-                    try:
-                        json_data = response.json()
-                        if json_data.get('IsSucceeded'):
-                            captured_api_data = json_data
-                            print("🎯 [DEBUG] Channels API verisi başarıyla yakalandı!")
-                    except Exception:
-                        pass
+            # Sitenin core-api'ye yaptığı ilk istekten orijinal başlıkları ve token'ı yakala
+            def handle_request(request):
+                nonlocal captured_headers
+                if "core-api.kablowebtv.com" in request.url and not captured_headers:
+                    headers = request.headers
+                    if "authorization" in headers:
+                        captured_headers = headers
+                        print("🔑 [DEBUG] Gerçek oturum başlıkları ve taze token başarıyla yakalandı!")
 
-            page.on("response", handle_response)
+            page.on("request", handle_request)
 
-            # Sayfaya git
+            # Sayfaya git ve insan gibi davranarak yüklenmesini bekle
             page.goto("https://tvheryerde.com", timeout=60000)
-            page.wait_for_timeout(5000)
             
-            print("🖱️ Kanalların yüklenmesini tetiklemek için olası sekmelere tıklanıyor...")
+            # Başlıkların ve token'ın oluşması için akıllı bekleme
+            start_time = time.time()
+            while not captured_headers and time.time() - start_time < 15:
+                page.wait_for_timeout(500)
+                
+            if not captured_headers:
+                raise ValueError("Oturum başlıkları (Authorization vb.) yakalanamadı!")
             
-            # Sitede "Canlı TV", "Kanallar" veya benzeri bir menü elemanını tetikleyelim
-            # Sayfa içinde geçebilecek olası metinleri arayıp tıklıyoruz
-            try:
-                # Örnek yaygın seçiciler veya metin bazlı tıklama denemeleri
-                page.get_by_text("Canlı TV", exact=False).click(timeout=3000)
-            except Exception:
-                try:
-                    page.get_by_text("Kanallar", exact=False).click(timeout=3000)
-                except Exception:
-                    pass
+            print("📡 Yakalanan orijinal başlıklar ile /api/channels adresine istek atılıyor...")
             
-            # İsteğin tetiklenmesi için bir süre daha bekleyelim
-            print("⏳ Kanal verilerinin gelmesi bekleniyor...")
-            page.wait_for_timeout(8000)
+            # Yakalanan orijinal başlıkları kullanarak tarayıcı bağlamında fetch at
+            api_response = page.evaluate("""async ({ url, reqHeaders }) => {
+                const res = await fetch(url, {
+                    method: 'GET',
+                    headers: reqHeaders
+                });
+                return await res.json();
+            }""", {"url": API_CHANNELS_URL, "reqHeaders": captured_headers})
             
             browser.close()
             
-        if not captured_api_data or not captured_api_data.get('Data', {}).get('AllChannels'):
-            raise ValueError("Channels API isteği tıklama sonrasında bile yakalanamadı.")
+        data = api_response
         
-        data = captured_api_data
-        print("✅ Kanallar işleniyor, M3U oluşturuluyor...")
+        if not data or not data.get('IsSucceeded') or not data.get('Data', {}).get('AllChannels'):
+            raise ValueError(f"API'den geçerli veri alınamadı. Yanıt: {str(data)[:150]}")
+        
+        print("✅ Kanallar başarıyla alındı, M3U oluşturuluyor...")
         
         m3u_lines = ["#EXTM3U"]
         for channel in data['Data']['AllChannels']:
