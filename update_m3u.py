@@ -8,7 +8,7 @@ API_CHANNELS_URL = "https://core-api.kablowebtv.com/api/channels"
 
 def generate_m3u():
     try:
-        print("🌐 Masaüstü tarayıcı profili zorlanarak başlatılıyor...")
+        print("📟 iPad (Tablet) profili başlatılıyor (Uygulama yönlendirmesini aşmak için)...")
         captured_data = None
         
         with sync_playwright() as p:
@@ -20,37 +20,30 @@ def generate_m3u():
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-accelerated-2d-canvas',
-                    '--disable-gpu',
-                    '--window-size=1920,1080'
+                    '--disable-gpu'
                 ]
             )
             
-            # Kesin olarak masaüstü ortamı taklit ediyoruz (Dokunmatik ekran yok, gerçek Windows Chrome)
+            # iPad (Tablet) profili taklit ediyoruz
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-                viewport={"width": 1920, "height": 1080},
-                device_scale_factor=1,
-                is_mobile=False,
-                has_touch=False,
+                user_agent="Mozilla/5.0 (iPad; CPU OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1",
+                viewport={"width": 1024, "height": 768},
+                device_scale_factor=2,
+                is_mobile=True,
+                has_touch=True,
                 locale="tr-TR",
                 timezone_id="Europe/Istanbul",
                 extra_http_headers={
                     "Referer": "https://tvheryerde.com/",
                     "Origin": "https://tvheryerde.com",
-                    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
-                    "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
-                    "Sec-Ch-Ua-Mobile": "?0",
-                    "Sec-Ch-Ua-Platform": '"Windows"'
+                    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
                 }
             )
             
-            # WebDriver ve mobil/bot izlerini tamamen silen gelişmiş stealth
+            # Stealth enjeksiyonu
             context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
-                });
-                Object.defineProperty(navigator, 'maxTouchPoints', {
-                    get: () => 0
                 });
                 window.navigator.chrome = {
                     runtime: {}
@@ -70,30 +63,29 @@ def generate_m3u():
                         json_data = response.json()
                         if json_data.get('IsSucceeded'):
                             captured_data = json_data
-                            print("🎯 [DEBUG] Channels API yanıtı başarıyla yakalandı!")
+                            print("🎯 [DEBUG] iPad modunda Channels API yanıtı başarıyla yakalandı!")
                     except Exception:
                         pass
 
             page.on("response", handle_response)
 
-            print("🌐 tvheryerde.com masaüstü görünümünde açılıyor...")
+            print("🌐 tvheryerde.com iPad tarayıcı modunda açılıyor...")
             page.goto("https://tvheryerde.com", timeout=60000)
             
-            # Sitenin yüklenmesi ve kanal isteklerini atması için bekle
+            # Sayfanın yüklenmesi ve API isteğini tetiklemesi için bekle
             start_time = time.time()
             while not captured_data and time.time() - start_time < 20:
                 page.wait_for_timeout(1000)
-                # Sayfada gezinme simülasyonu ile tetikleyelim
                 if not captured_data and time.time() - start_time > 6:
                     try:
-                        page.mouse.wheel(0, 400)
+                        page.mouse.wheel(0, 300)
                     except Exception:
                         pass
 
             browser.close()
             
         if not captured_data or not captured_data.get('Data', {}).get('AllChannels'):
-            raise ValueError("Masaüstü modunda bile API yanıtı alınamadı.")
+            raise ValueError("iPad modunda da API yanıtı alınamadı.")
         
         data = captured_data
         print("✅ Kanallar başarıyla alındı, M3U oluşturuluyor...")
