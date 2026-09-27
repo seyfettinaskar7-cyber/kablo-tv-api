@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 import json
-import time
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 
-API_URL = "https://core-api.kablowebtv.com/api/channels"
+API_CHANNELS_URL = "core-api.kablowebtv.com/api/channels"
 
 def generate_m3u():
     try:
         print("🌐 Tarayıcı başlatılıyor ve tvheryerde.com açılıyor...")
+        captured_api_data = None
+        
         with sync_playwright() as p:
             browser = p.chromium.launch(headless=True)
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
                 extra_http_headers={
                     "Referer": "https://tvheryerde.com",
                     "Origin": "https://tvheryerde.com"
@@ -20,58 +21,44 @@ def generate_m3u():
             )
             page = context.new_page()
             
-            captured_token = None
-            
-            # Ağ trafiğini dinleyip token'ı yakalayan fonksiyon
-            def handle_route(route, request):
-                nonlocal captured_token
+            # 1. İstekleri dinleyip Token'ı Debug'a yazdıralım
+            def handle_request(request):
                 if "core-api.kablowebtv.com" in request.url:
                     auth_header = request.headers.get("authorization", "")
                     if auth_header.startswith("Bearer "):
-                        token_val = auth_header.replace("Bearer ", "")
-                        if not captured_token: # İlk yakalananı al
-                            captured_token = token_val
-                            print(f"🎯 [DEBUG] Ağ trafiğinden taze JWT Token yakalandı!")
-                route.continue_()
+                        token = auth_header.replace("Bearer ", "")
+                        print(f"\n🔑 [DEBUG] Yakalanan JWT Token:\n{token}\n")
 
-            context.route("**/*", handle_route)
+            page.on("request", handle_request)
+
+            # 2. Kanallar API'sinin verdiği yanıtı (response) doğrudan yakalayalım
+            def handle_response(response):
+                nonlocal captured_api_data
+                if API_CHANNELS_URL in response.url and response.status == 200:
+                    try:
+                        json_data = response.json()
+                        if json_data.get('IsSucceeded'):
+                            captured_api_data = json_data
+                            print("🎯 [DEBUG] Kanallar API'sinin başarılı yanıtı doğrudan ağ trafiğinden yakalandı!")
+                    except Exception:
+                        pass
+
+            page.on("response", handle_response)
 
             # Sayfaya git
             page.goto("https://tvheryerde.com", timeout=60000)
             
-            # Token'ın ağ trafiğinde belirmesi için birkaç saniye bekle
-            print("⏳ Token'ın ağ trafiğinde oluşması bekleniyor...")
-            start_time = time.time()
-            while not captured_token and time.time() - start_time < 15:
-                page.wait_for_timeout(500)
-            
-            if not captured_token:
-                raise ValueError("Ağ trafiğinden Bearer token yakalanamadı!")
-            
-            print(f"✅ Yakalanan Token ile Kanallar API'sine istek atılıyor...")
-            
-            # Yakalanan gerçek token'ı fetch isteğinin içine Authorization olarak ekliyoruz
-            api_response = page.evaluate("""async ({ url, token }) => {
-                const res = await fetch(url, {
-                    method: 'GET',
-                    headers: {
-                        'Accept': 'application/json',
-                        'Authorization': 'Bearer ' + token,
-                        'Origin': 'https://tvheryerde.com',
-                        'Referer': 'https://tvheryerde.com'
-                    }
-                });
-                return await res.json();
-            }""", {"url": API_URL, "token": captured_token})
+            # Ağ trafiğinden verinin gelmesi için biraz bekle
+            print("⏳ Sayfanın yüklenmesi ve kanal verilerinin gelmesi bekleniyor...")
+            page.wait_for_timeout(8000)
             
             browser.close()
             
-        data = api_response
+        if not captured_api_data or not captured_api_data.get('Data', {}).get('AllChannels'):
+            raise ValueError("API verisi ağ trafiğinden yakalanamadı!")
         
-        if not data or not data.get('IsSucceeded') or not data.get('Data', {}).get('AllChannels'):
-            raise ValueError(f"API'den geçerli veri alınamadı. Yanıt: {str(data)[:150]}")
-        
-        print("✅ Kanallar başarıyla alındı, M3U oluşturuluyor...")
+        data = captured_api_data
+        print("✅ Kanallar işleniyor, M3U oluşturuluyor...")
         
         m3u_lines = ["#EXTM3U"]
         for channel in data['Data']['AllChannels']:
