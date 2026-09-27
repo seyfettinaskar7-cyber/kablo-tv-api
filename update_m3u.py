@@ -1,68 +1,80 @@
 #!/usr/bin/env python3
-import requests
+import json
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 
 API_URL = "https://core-api.kablowebtv.com/api/channels"
 
-def get_dynamic_token():
-    with sync_playwright() as p:
-        # Headless (arayüzsüz) tarayıcıyı başlat
-        browser = p.chromium.launch(headless=True)
-        page = browser.new_page()
-        
-        captured_token = None
-
-        # Ağ trafiğini dinle ve core-api isteğini yakala
-        def handle_request(route, request):
-            nonlocal captured_token
-            if "core-api.kablowebtv.com" in request.url:
-                headers = request.headers
-                if "authorization" in headers:
-                    auth = headers["authorization"]
-                    if auth.startswith("Bearer "):
-                        captured_token = auth.replace("Bearer ", "")
-            route.continue_()
-
-        page.route("**/*", handle_request)
-        
-        try:
-            print("🌐 tvheryerde.com adresine bağlanılıyor...")
-            page.goto("https://tvheryerde.com", timeout=60000)
-            # Sayfanın yüklenmesi ve API isteklerini tetiklemesi için bekle
-            page.wait_for_timeout(8000)
-        except Exception as e:
-            print(f"Tarayıcı yükleme hatası: {e}")
-        finally:
-            browser.close()
-            
-        return captured_token
-
 def generate_m3u():
     try:
-        print("🔍 Tarayıcı otomasyonu ile taze token alınıyor...")
-        token = get_dynamic_token()
-        
-        if not token:
-            raise ValueError("Playwright ile Bearer token yakalanamadı!")
-        
-        print("✅ Token başarıyla yakalandı.")
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
-            "Referer": "https://tvheryerde.com",
-            "Origin": "https://tvheryerde.com",
-            "Authorization": f"Bearer {token}"
-        }
+        print("🌐 Tarayıcı başlatılıyor ve tvheryerde.com açılıyor...")
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+                referer="https://tvheryerde.com"
+            )
+            page = context.new_page()
+            
+            # --- DEBUG / YAKALAMA MEKANİZMASI ---
+            captured_token = None
+            
+            def handle_route(route, request):
+                nonlocal captured_token
+                # KabloTV API isteklerini yakala ve logla
+                if "core-api.kablowebtv.com" in request.url:
+                    headers = request.headers
+                    auth_header = headers.get("authorization", "")
+                    
+                    print(f"\n--- [DEBUG] İstek Atılan URL: {request.url} ---")
+                    print(f"--- [DEBUG] Tüm Headerlar: {json.dumps(headers, indent=2)} ---")
+                    
+                    if auth_header.startswith("Bearer "):
+                        captured_token = auth_header.replace("Bearer ", "")
+                        print(f"🎯 [DEBUG] Başarıyla Yakalanan Token:\n{captured_token}\n")
+                        
+                        # JWT Doğrulama (Nokta sayısından kontrol)
+                        parts = captured_token.split('.')
+                        if len(parts) == 3:
+                            print("✅ [DEBUG] Bu geçerli bir JWT formatıdır (3 parçadan oluşuyor).")
+                        else:
+                            print("⚠️ [DEBUG] Uyarı: Token standart JWT yapısında görünmüyor!")
+                    else:
+                        print("⚠️ [DEBUG] İstekte Authorization Bearer başlığı bulunamadı!")
+                        
+                route.continue_()
 
-        print("📡 Kanallar API'den çekiliyor...")
-        response = requests.get(API_URL, headers=headers, timeout=20)
-        response.raise_for_status()
+            # Tüm ağ trafiğini yukarıdaki fonksiyonla dinle
+            context.route("**/*", handle_route)
+            # ------------------------------------
+
+            # Sayfaya git ve API isteklerinin tetiklenmesini bekle
+            page.goto("https://tvheryerde.com", timeout=60000)
+            page.wait_for_timeout(6000)
+            
+            print("📡 Tarayıcı üzerinden Kanallar API'sine istek atılıyor...")
+            
+            # Tarayıcı içinde fetch kullanarak veriyi çek
+            api_response = page.evaluate("""async (url) => {
+                const res = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Origin': 'https://tvheryerde.com',
+                        'Referer': 'https://tvheryerde.com'
+                    }
+                });
+                return await res.json();
+            }""", API_URL)
+            
+            browser.close()
+            
+        data = api_response
         
-        data = response.json()
+        if not data or not data.get('IsSucceeded') or not data.get('Data', {}).get('AllChannels'):
+            raise ValueError(f"API'den geçerli veri alınamadı. Yanıt: {str(data)[:150]}")
         
-        if not data.get('IsSucceeded') or not data.get('Data', {}).get('AllChannels'):
-            raise ValueError("API geçersiz yanıt verdi veya token reddedildi.")
+        print("✅ Kanallar başarıyla alındı, M3U oluşturuluyor...")
         
         m3u_lines = ["#EXTM3U"]
         for channel in data['Data']['AllChannels']:
