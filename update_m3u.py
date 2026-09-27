@@ -3,12 +3,10 @@ import json
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 
-API_CHANNELS_URL = "https://core-api.kablowebtv.com/api/channels"
-
 def generate_m3u():
     try:
-        print("🌐 Tarayıcı başlatılıyor...")
-        data = None
+        print("🌐 Tarayıcı başlatılıyor ve tvheryerde.com açılıyor...")
+        captured_api_data = None
         
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -24,36 +22,42 @@ def generate_m3u():
             )
             page = context.new_page()
             
-            # 1. Ana sayfaya git ve oturumun/çerezlerin tam oluşması için bekle
-            print("🌐 tvheryerde.com ana sayfasına bağlanılıyor...")
+            # Ağ trafiğindeki yanıtları (response) dinamik olarak dinleyelim
+            def handle_response(response):
+                nonlocal captured_api_data
+                if "/api/channels" in response.url:
+                    try:
+                        json_data = response.json()
+                        if json_data.get('IsSucceeded'):
+                            captured_api_data = json_data
+                            print("🎯 [DEBUG] Channels API verisi ağ trafiğinden başarıyla yakalandı!")
+                    except Exception:
+                        pass
+
+            page.on("response", handle_response)
+
+            # Sayfaya git ve ağ trafiğinin tamamen oturmasını bekle
             page.goto("https://tvheryerde.com", timeout=60000)
-            page.wait_for_timeout(8000) # Oturumun oturması için süre tanıyoruz
             
-            print("📡 Tarayıcı oturumu üzerinden kanallar çekiliyor...")
+            print("⏳ Sitenin arayüzünün yüklenmesi ve kanal isteklerinin atılması bekleniyor...")
             
-            # 2. Tarayıcının kendi içinde fetch atıyoruz (Tüm çerezler ve token otomatik eklenir)
-            data = page.evaluate("""async (url) => {
-                try {
-                    const res = await fetch(url, {
-                        method: 'GET',
-                        headers: {
-                            'Accept': 'application/json',
-                            'X-Requested-With': 'XMLHttpRequest'
-                        },
-                        credentials: 'include'
-                    });
-                    return await res.json();
-                } catch (err) {
-                    return { error: err.toString() };
-                }
-            }""", API_CHANNELS_URL)
+            # Sitenin arka planda kanalları çekmesi için network idle (ağ durulması) olana kadar veya 20 saniye bekleyelim
+            try:
+                page.wait_for_load_state("networkidle", timeout=20000)
+            except Exception:
+                pass
+                
+            # Ekstra güvenlik payı ve içeriğin yüklenmesi için biraz daha süre tanıyoruz
+            if not captured_api_data:
+                page.wait_for_timeout(10000)
             
             browser.close()
             
-        if not data or not data.get('IsSucceeded') or not data.get('Data', {}).get('AllChannels'):
-            raise ValueError(f"API'den geçerli veri alınamadı. Yanıt: {str(data)[:150]}")
+        if not captured_api_data or not captured_api_data.get('Data', {}).get('AllChannels'):
+            raise ValueError("Sitenin kendi attığı Channels API isteği yakalanamadı (Zaman aşımı).")
         
-        print("✅ Kanallar başarıyla alındı, M3U oluşturuluyor...")
+        data = captured_api_data
+        print("✅ Kanallar işleniyor, M3U oluşturuluyor...")
         
         m3u_lines = ["#EXTM3U"]
         for channel in data['Data']['AllChannels']:
