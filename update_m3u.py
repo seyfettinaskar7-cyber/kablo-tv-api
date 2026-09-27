@@ -8,7 +8,7 @@ API_CHANNELS_URL = "https://core-api.kablowebtv.com/api/channels"
 
 def generate_m3u():
     try:
-        print("🌐 Gerçekçi tarayıcı profili başlatılıyor...")
+        print("🌐 Masaüstü tarayıcı profili zorlanarak başlatılıyor...")
         captured_data = None
         
         with sync_playwright() as p:
@@ -20,26 +20,37 @@ def generate_m3u():
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
                     '--disable-accelerated-2d-canvas',
-                    '--disable-gpu'
+                    '--disable-gpu',
+                    '--window-size=1920,1080'
                 ]
             )
             
+            # Kesin olarak masaüstü ortamı taklit ediyoruz (Dokunmatik ekran yok, gerçek Windows Chrome)
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
                 viewport={"width": 1920, "height": 1080},
+                device_scale_factor=1,
+                is_mobile=False,
+                has_touch=False,
                 locale="tr-TR",
                 timezone_id="Europe/Istanbul",
                 extra_http_headers={
                     "Referer": "https://tvheryerde.com/",
                     "Origin": "https://tvheryerde.com",
-                    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7"
+                    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+                    "Sec-Ch-Ua": '"Chromium";v="122", "Not(A:Brand";v="24", "Google Chrome";v="122"',
+                    "Sec-Ch-Ua-Mobile": "?0",
+                    "Sec-Ch-Ua-Platform": '"Windows"'
                 }
             )
             
-            # Gerçek kullanıcı parmak izi (Stealth) enjeksiyonu
+            # WebDriver ve mobil/bot izlerini tamamen silen gelişmiş stealth
             context.add_init_script("""
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
+                });
+                Object.defineProperty(navigator, 'maxTouchPoints', {
+                    get: () => 0
                 });
                 window.navigator.chrome = {
                     runtime: {}
@@ -47,14 +58,11 @@ def generate_m3u():
                 Object.defineProperty(navigator, 'languages', {
                     get: () => ['tr-TR', 'tr', 'en-US', 'en']
                 });
-                Object.defineProperty(navigator, 'plugins', {
-                    get: () => [1, 2, 3, 4, 5]
-                });
             """)
             
             page = context.new_page()
             
-            # Ağ trafiğindeki /api/channels yanıtını doğrudan dinle ve yakala
+            # Ağ trafiğindeki /api/channels yanıtını dinle
             def handle_response(response):
                 nonlocal captured_data
                 if "/api/channels" in response.url:
@@ -62,31 +70,30 @@ def generate_m3u():
                         json_data = response.json()
                         if json_data.get('IsSucceeded'):
                             captured_data = json_data
-                            print("🎯 [DEBUG] Channels API yanıtı doğrudan ağ trafiğinden yakalandı!")
+                            print("🎯 [DEBUG] Channels API yanıtı başarıyla yakalandı!")
                     except Exception:
                         pass
 
             page.on("response", handle_response)
 
-            # Doğrudan canlı TV veya kanalların yüklendiği sayfaya bağlan
-            print("🌐 tvheryerde.com/canli-tv sayfasına bağlanılıyor...")
-            page.goto("https://tvheryerde.com/canli-tv", timeout=60000)
+            print("🌐 tvheryerde.com masaüstü görünümünde açılıyor...")
+            page.goto("https://tvheryerde.com", timeout=60000)
             
-            # Sitenin arayüzünün yüklenmesi ve API isteğini tetiklemesi için bekle
+            # Sitenin yüklenmesi ve kanal isteklerini atması için bekle
             start_time = time.time()
             while not captured_data and time.time() - start_time < 20:
                 page.wait_for_timeout(1000)
-                # Eğer ilk başta yakalanamazsa sayfada hafifçe aşağı kaydırarak tetikleyelim
-                if not captured_data and time.time() - start_time > 5:
+                # Sayfada gezinme simülasyonu ile tetikleyelim
+                if not captured_data and time.time() - start_time > 6:
                     try:
-                        page.mouse.wheel(0, 300)
+                        page.mouse.wheel(0, 400)
                     except Exception:
                         pass
 
             browser.close()
             
         if not captured_data or not captured_data.get('Data', {}).get('AllChannels'):
-            raise ValueError("API yanıtı ağ trafiğinden yakalanamadı.")
+            raise ValueError("Masaüstü modunda bile API yanıtı alınamadı.")
         
         data = captured_data
         print("✅ Kanallar başarıyla alındı, M3U oluşturuluyor...")
