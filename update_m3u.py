@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import time
+import re
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 
@@ -55,36 +56,41 @@ def generate_m3u():
             
             page = context.new_page()
             
-            # Sitenin core-api'ye yaptığı ilk istekten orijinal başlıkları ve token'ı yakala
+            # Regex ile eyJ... içeren geçerli JWT token'ı yakalama
             def handle_request(request):
                 nonlocal captured_headers
                 if "core-api.kablowebtv.com" in request.url and not captured_headers:
                     headers = request.headers
-                    if "authorization" in headers:
+                    auth_header = headers.get("authorization", "")
+                    
+                    # Regex deseni ile eyJ ile başlayan JWT yapısını ara
+                    jwt_pattern = re.compile(r'eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+')
+                    match = jwt_pattern.search(auth_header)
+                    
+                    if match:
                         captured_headers = dict(headers)
-                        auth_val = captured_headers.get("authorization", "")
-                        print(f"🔑 [DEBUG] Yakalanan Tam JWT Token:\n{auth_val}\n")
+                        pure_token = match.group(0)
+                        print(f"🔑 [DEBUG] Regex ile geçerli JWT Token yakalandı: {pure_token[:30]}...")
 
             page.on("request", handle_request)
 
             # Sayfaya git
             page.goto("https://tvheryerde.com", timeout=60000)
             
-            # Başlıkların oluşması için bekle
+            # Token'ın yakalanması için bekle
             start_time = time.time()
             while not captured_headers and time.time() - start_time < 15:
                 page.wait_for_timeout(500)
                 
             if not captured_headers:
-                raise ValueError("Oturum başlıkları (Authorization vb.) yakalanamadı!")
+                raise ValueError("Regex ile eşleşen geçerli bir JWT token yakalanamadı!")
             
-            # --- ÇEREZLERİ (COOKIES) AL VE BAŞLIKLARA EKLE ---
+            # Tarayıcı çerezlerini al ve başlığa ekle
             cookies_list = context.cookies()
             cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies_list])
             if cookie_string:
                 captured_headers["Cookie"] = cookie_string
-                print("🍪 [DEBUG] Tarayıcı çerezleri başarıyla alındı ve isteğe eklendi!")
-            # ------------------------------------------------
+                print("🍪 [DEBUG] Tarayıcı çerezleri başlığa eklendi.")
             
             print("📡 Yakalanan tam başlıklar ve çerezler ile /api/channels adresine istek atılıyor...")
             
