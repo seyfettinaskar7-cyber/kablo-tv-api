@@ -10,9 +10,9 @@ def generate_m3u():
     try:
         print("🌐 Gerçekçi tarayıcı profili başlatılıyor ve tvheryerde.com açılıyor...")
         captured_headers = None
+        cookies_list = None
         
         with sync_playwright() as p:
-            # Bot korumalarını atlamak için gelişmiş başlatma argümanları
             browser = p.chromium.launch(
                 headless=True,
                 args=[
@@ -37,28 +37,21 @@ def generate_m3u():
                 }
             )
             
-            # --- GERÇEK KULLANICI PARMAK İZİ (STEALTH) ENJEKSİYONU ---
+            # Gerçek kullanıcı parmak izi (Stealth) enjeksiyonu
             context.add_init_script("""
-                // webdriver bayrağını gizle
                 Object.defineProperty(navigator, 'webdriver', {
                     get: () => undefined
                 });
-                
-                // Chrome nesnesini taklit et
                 window.navigator.chrome = {
                     runtime: {}
                 };
-                
-                // Dil ve eklentileri gerçekçi göster
                 Object.defineProperty(navigator, 'languages', {
                     get: () => ['tr-TR', 'tr', 'en-US', 'en']
                 });
-                
                 Object.defineProperty(navigator, 'plugins', {
                     get: () => [1, 2, 3, 4, 5]
                 });
             """)
-            # ---------------------------------------------------------
             
             page = context.new_page()
             
@@ -68,15 +61,16 @@ def generate_m3u():
                 if "core-api.kablowebtv.com" in request.url and not captured_headers:
                     headers = request.headers
                     if "authorization" in headers:
-                        captured_headers = headers
-                        print("🔑 [DEBUG] Gerçek oturum başlıkları ve taze token başarıyla yakalandı!")
+                        captured_headers = dict(headers)
+                        auth_val = captured_headers.get("authorization", "")
+                        print(f"🔑 [DEBUG] Yakalanan Tam JWT Token:\n{auth_val}\n")
 
             page.on("request", handle_request)
 
-            # Sayfaya git ve insan gibi davranarak yüklenmesini bekle
+            # Sayfaya git
             page.goto("https://tvheryerde.com", timeout=60000)
             
-            # Başlıkların ve token'ın oluşması için akıllı bekleme
+            # Başlıkların oluşması için bekle
             start_time = time.time()
             while not captured_headers and time.time() - start_time < 15:
                 page.wait_for_timeout(500)
@@ -84,9 +78,17 @@ def generate_m3u():
             if not captured_headers:
                 raise ValueError("Oturum başlıkları (Authorization vb.) yakalanamadı!")
             
-            print("📡 Yakalanan orijinal başlıklar ile /api/channels adresine istek atılıyor...")
+            # --- ÇEREZLERİ (COOKIES) AL VE BAŞLIKLARA EKLE ---
+            cookies_list = context.cookies()
+            cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies_list])
+            if cookie_string:
+                captured_headers["Cookie"] = cookie_string
+                print("🍪 [DEBUG] Tarayıcı çerezleri başarıyla alındı ve isteğe eklendi!")
+            # ------------------------------------------------
             
-            # Yakalanan orijinal başlıkları kullanarak tarayıcı bağlamında fetch at
+            print("📡 Yakalanan tam başlıklar ve çerezler ile /api/channels adresine istek atılıyor...")
+            
+            # Yakalanan orijinal başlıklar ve çerezleri kullanarak fetch at
             api_response = page.evaluate("""async ({ url, reqHeaders }) => {
                 const res = await fetch(url, {
                     method: 'GET',
