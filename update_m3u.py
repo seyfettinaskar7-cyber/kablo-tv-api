@@ -3,7 +3,7 @@ import json
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 
-API_CHANNELS_URL = "core-api.kablowebtv.com/api/channels"
+API_URL = "https://core-api.kablowebtv.com/api/channels"
 
 def generate_m3u():
     try:
@@ -11,9 +11,12 @@ def generate_m3u():
         captured_api_data = None
         
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(
+                headless=True,
+                args=['--disable-blink-features=AutomationControlled'] # Bot algılamasını hafifletmek için
+            )
             context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
                 extra_http_headers={
                     "Referer": "https://tvheryerde.com",
                     "Origin": "https://tvheryerde.com"
@@ -21,41 +24,44 @@ def generate_m3u():
             )
             page = context.new_page()
             
-            # 1. İstekleri dinleyip Token'ı Debug'a yazdıralım
+            # 1. İstekleri ve Token'ı Yakala
             def handle_request(request):
                 if "core-api.kablowebtv.com" in request.url:
                     auth_header = request.headers.get("authorization", "")
                     if auth_header.startswith("Bearer "):
                         token = auth_header.replace("Bearer ", "")
-                        print(f"\n🔑 [DEBUG] Yakalanan JWT Token:\n{token}\n")
+                        print(f"🔑 [DEBUG] Yakalanan JWT Token: {token[:30]}...")
 
             page.on("request", handle_request)
 
-            # 2. Kanallar API'sinin verdiği yanıtı (response) doğrudan yakalayalım
+            # 2. Yanıtları (Response) İncele ve Logla
             def handle_response(response):
                 nonlocal captured_api_data
-                if API_CHANNELS_URL in response.url and response.status == 200:
+                if "core-api.kablowebtv.com/api/channels" in response.url:
+                    print(f"\n📡 [DEBUG] Channels API Yanıt Kodu: {response.status}")
                     try:
+                        body = response.text()
+                        print(f"📦 [DEBUG] API Yanıt İçeriği: {body[:200]}...") # İlk 200 karakteri göster
                         json_data = response.json()
                         if json_data.get('IsSucceeded'):
                             captured_api_data = json_data
-                            print("🎯 [DEBUG] Kanallar API'sinin başarılı yanıtı doğrudan ağ trafiğinden yakalandı!")
-                    except Exception:
-                        pass
+                            print("🎯 [DEBUG] Başarılı kanal verisi yakalandı!")
+                    except Exception as e:
+                        print(f"⚠️ [DEBUG] Yanıt okunurken hata: {e}")
 
             page.on("response", handle_response)
 
             # Sayfaya git
+            print("🌐 Sayfa yükleniyor...")
             page.goto("https://tvheryerde.com", timeout=60000)
             
-            # Ağ trafiğinden verinin gelmesi için biraz bekle
-            print("⏳ Sayfanın yüklenmesi ve kanal verilerinin gelmesi bekleniyor...")
-            page.wait_for_timeout(8000)
+            # Sayfanın tam oturması ve API isteklerinin tamamlanması için bekle
+            page.wait_for_timeout(10000)
             
             browser.close()
             
         if not captured_api_data or not captured_api_data.get('Data', {}).get('AllChannels'):
-            raise ValueError("API verisi ağ trafiğinden yakalanamadı!")
+            raise ValueError("Channels API'den geçerli veri alınamadı (Yukarıdaki Yanıt Kodu ve İçeriğini kontrol edin).")
         
         data = captured_api_data
         print("✅ Kanallar işleniyor, M3U oluşturuluyor...")
