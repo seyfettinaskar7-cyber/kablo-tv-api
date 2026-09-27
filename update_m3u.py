@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 import json
+import time
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 
-API_URL = "https://core-api.kablowebtv.com/api/channels"
+API_CHANNELS_URL = "https://core-api.kablowebtv.com/api/channels"
 
 def generate_m3u():
     try:
         print("🌐 Tarayıcı başlatılıyor ve tvheryerde.com açılıyor...")
-        captured_api_data = None
+        captured_token = None
         
         with sync_playwright() as p:
             browser = p.chromium.launch(
                 headless=True,
-                args=['--disable-blink-features=AutomationControlled'] # Bot algılamasını hafifletmek için
+                args=['--disable-blink-features=AutomationControlled']
             )
             context = browser.new_context(
                 user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -24,47 +25,55 @@ def generate_m3u():
             )
             page = context.new_page()
             
-            # 1. İstekleri ve Token'ı Yakala
+            # 1. Ağ trafiğinden taze token'ı yakala
             def handle_request(request):
+                nonlocal captured_token
                 if "core-api.kablowebtv.com" in request.url:
                     auth_header = request.headers.get("authorization", "")
                     if auth_header.startswith("Bearer "):
                         token = auth_header.replace("Bearer ", "")
-                        print(f"🔑 [DEBUG] Yakalanan JWT Token: {token[:30]}...")
+                        if not captured_token:
+                            captured_token = token
+                            print(f"🔑 [DEBUG] Yakalanan Taze JWT Token: {token[:30]}...")
 
             page.on("request", handle_request)
-
-            # 2. Yanıtları (Response) İncele ve Logla
-            def handle_response(response):
-                nonlocal captured_api_data
-                if "core-api.kablowebtv.com/api/channels" in response.url:
-                    print(f"\n📡 [DEBUG] Channels API Yanıt Kodu: {response.status}")
-                    try:
-                        body = response.text()
-                        print(f"📦 [DEBUG] API Yanıt İçeriği: {body[:200]}...") # İlk 200 karakteri göster
-                        json_data = response.json()
-                        if json_data.get('IsSucceeded'):
-                            captured_api_data = json_data
-                            print("🎯 [DEBUG] Başarılı kanal verisi yakalandı!")
-                    except Exception as e:
-                        print(f"⚠️ [DEBUG] Yanıt okunurken hata: {e}")
-
-            page.on("response", handle_response)
 
             # Sayfaya git
             print("🌐 Sayfa yükleniyor...")
             page.goto("https://tvheryerde.com", timeout=60000)
             
-            # Sayfanın tam oturması ve API isteklerinin tamamlanması için bekle
-            page.wait_for_timeout(10000)
+            # Token'ın ağ trafiğinde oluşması için max 15 saniye bekle
+            start_time = time.time()
+            while not captured_token and time.time() - start_time < 15:
+                page.wait_for_timeout(500)
+                
+            if not captured_token:
+                raise ValueError("Ağ trafiğinden JWT token yakalanamadı!")
+            
+            print("📡 Yakalanan taze token ile tarayıcı içinde Channels API'sine istek atılıyor...")
+            
+            # 2. Yakaladığımız taze token'ı kullanarak tarayıcı içinde doğrudan fetch at
+            api_response = page.evaluate("""async ({ url, token }) => {
+                const res = await fetch(url, {
+                    method: 'GET',
+                    headers: {
+                        'Accept': 'application/json',
+                        'Authorization': 'Bearer ' + token,
+                        'Origin': 'https://tvheryerde.com',
+                        'Referer': 'https://tvheryerde.com'
+                    }
+                });
+                return await res.json();
+            }""", {"url": API_CHANNELS_URL, "token": captured_token})
             
             browser.close()
             
-        if not captured_api_data or not captured_api_data.get('Data', {}).get('AllChannels'):
-            raise ValueError("Channels API'den geçerli veri alınamadı (Yukarıdaki Yanıt Kodu ve İçeriğini kontrol edin).")
+        data = api_response
         
-        data = captured_api_data
-        print("✅ Kanallar işleniyor, M3U oluşturuluyor...")
+        if not data or not data.get('IsSucceeded') or not data.get('Data', {}).get('AllChannels'):
+            raise ValueError(f"API'den geçerli veri alınamadı. Yanıt: {str(data)[:150]}")
+        
+        print("✅ Kanallar başarıyla alındı, M3U oluşturuluyor...")
         
         m3u_lines = ["#EXTM3U"]
         for channel in data['Data']['AllChannels']:
