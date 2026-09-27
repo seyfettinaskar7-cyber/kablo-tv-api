@@ -22,7 +22,7 @@ def generate_m3u():
             )
             page = context.new_page()
             
-            # Ağ trafiğindeki yanıtları (response) dinamik olarak dinleyelim
+            # Ağ trafiğindeki yanıtları dinle
             def handle_response(response):
                 nonlocal captured_api_data
                 if "/api/channels" in response.url:
@@ -30,31 +30,37 @@ def generate_m3u():
                         json_data = response.json()
                         if json_data.get('IsSucceeded'):
                             captured_api_data = json_data
-                            print("🎯 [DEBUG] Channels API verisi ağ trafiğinden başarıyla yakalandı!")
+                            print("🎯 [DEBUG] Channels API verisi başarıyla yakalandı!")
                     except Exception:
                         pass
 
             page.on("response", handle_response)
 
-            # Sayfaya git ve ağ trafiğinin tamamen oturmasını bekle
+            # Sayfaya git
             page.goto("https://tvheryerde.com", timeout=60000)
+            page.wait_for_timeout(5000)
             
-            print("⏳ Sitenin arayüzünün yüklenmesi ve kanal isteklerinin atılması bekleniyor...")
+            print("🖱️ Kanalların yüklenmesini tetiklemek için olası sekmelere tıklanıyor...")
             
-            # Sitenin arka planda kanalları çekmesi için network idle (ağ durulması) olana kadar veya 20 saniye bekleyelim
+            # Sitede "Canlı TV", "Kanallar" veya benzeri bir menü elemanını tetikleyelim
+            # Sayfa içinde geçebilecek olası metinleri arayıp tıklıyoruz
             try:
-                page.wait_for_load_state("networkidle", timeout=20000)
+                # Örnek yaygın seçiciler veya metin bazlı tıklama denemeleri
+                page.get_by_text("Canlı TV", exact=False).click(timeout=3000)
             except Exception:
-                pass
-                
-            # Ekstra güvenlik payı ve içeriğin yüklenmesi için biraz daha süre tanıyoruz
-            if not captured_api_data:
-                page.wait_for_timeout(10000)
+                try:
+                    page.get_by_text("Kanallar", exact=False).click(timeout=3000)
+                except Exception:
+                    pass
+            
+            # İsteğin tetiklenmesi için bir süre daha bekleyelim
+            print("⏳ Kanal verilerinin gelmesi bekleniyor...")
+            page.wait_for_timeout(8000)
             
             browser.close()
             
         if not captured_api_data or not captured_api_data.get('Data', {}).get('AllChannels'):
-            raise ValueError("Sitenin kendi attığı Channels API isteği yakalanamadı (Zaman aşımı).")
+            raise ValueError("Channels API isteği tıklama sonrasında bile yakalanamadı.")
         
         data = captured_api_data
         print("✅ Kanallar işleniyor, M3U oluşturuluyor...")
