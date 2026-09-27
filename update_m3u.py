@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import json
 import time
-import re
 from playwright.sync_api import sync_playwright
 from datetime import datetime
 
@@ -9,9 +8,8 @@ API_CHANNELS_URL = "https://core-api.kablowebtv.com/api/channels"
 
 def generate_m3u():
     try:
-        print("🌐 Gerçekçi tarayıcı profili başlatılıyor ve tvheryerde.com açılıyor...")
-        captured_headers = None
-        cookies_list = None
+        print("🌐 Gerçekçi tarayıcı profili başlatılıyor...")
+        captured_data = None
         
         with sync_playwright() as p:
             browser = p.chromium.launch(
@@ -56,60 +54,41 @@ def generate_m3u():
             
             page = context.new_page()
             
-            # Regex ile eyJ... içeren geçerli JWT token'ı yakalama
-            def handle_request(request):
-                nonlocal captured_headers
-                if "core-api.kablowebtv.com" in request.url and not captured_headers:
-                    headers = request.headers
-                    auth_header = headers.get("authorization", "")
-                    
-                    # Regex deseni ile eyJ ile başlayan JWT yapısını ara
-                    jwt_pattern = re.compile(r'eyJ[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+\.[a-zA-Z0-9_\-]+')
-                    match = jwt_pattern.search(auth_header)
-                    
-                    if match:
-                        captured_headers = dict(headers)
-                        pure_token = match.group(0)
-                        print(f"🔑 [DEBUG] Regex ile geçerli JWT Token yakalandı: {pure_token[:30]}...")
+            # Ağ trafiğindeki /api/channels yanıtını doğrudan dinle ve yakala
+            def handle_response(response):
+                nonlocal captured_data
+                if "/api/channels" in response.url:
+                    try:
+                        json_data = response.json()
+                        if json_data.get('IsSucceeded'):
+                            captured_data = json_data
+                            print("🎯 [DEBUG] Channels API yanıtı doğrudan ağ trafiğinden yakalandı!")
+                    except Exception:
+                        pass
 
-            page.on("request", handle_request)
+            page.on("response", handle_response)
 
-            # Sayfaya git
-            page.goto("https://tvheryerde.com", timeout=60000)
+            # Doğrudan canlı TV veya kanalların yüklendiği sayfaya bağlan
+            print("🌐 tvheryerde.com/canli-tv sayfasına bağlanılıyor...")
+            page.goto("https://tvheryerde.com/canli-tv", timeout=60000)
             
-            # Token'ın yakalanması için bekle
+            # Sitenin arayüzünün yüklenmesi ve API isteğini tetiklemesi için bekle
             start_time = time.time()
-            while not captured_headers and time.time() - start_time < 15:
-                page.wait_for_timeout(500)
-                
-            if not captured_headers:
-                raise ValueError("Regex ile eşleşen geçerli bir JWT token yakalanamadı!")
-            
-            # Tarayıcı çerezlerini al ve başlığa ekle
-            cookies_list = context.cookies()
-            cookie_string = "; ".join([f"{c['name']}={c['value']}" for c in cookies_list])
-            if cookie_string:
-                captured_headers["Cookie"] = cookie_string
-                print("🍪 [DEBUG] Tarayıcı çerezleri başlığa eklendi.")
-            
-            print("📡 Yakalanan tam başlıklar ve çerezler ile /api/channels adresine istek atılıyor...")
-            
-            # Yakalanan orijinal başlıklar ve çerezleri kullanarak fetch at
-            api_response = page.evaluate("""async ({ url, reqHeaders }) => {
-                const res = await fetch(url, {
-                    method: 'GET',
-                    headers: reqHeaders
-                });
-                return await res.json();
-            }""", {"url": API_CHANNELS_URL, "reqHeaders": captured_headers})
-            
+            while not captured_data and time.time() - start_time < 20:
+                page.wait_for_timeout(1000)
+                # Eğer ilk başta yakalanamazsa sayfada hafifçe aşağı kaydırarak tetikleyelim
+                if not captured_data and time.time() - start_time > 5:
+                    try:
+                        page.mouse.wheel(0, 300)
+                    except Exception:
+                        pass
+
             browser.close()
             
-        data = api_response
+        if not captured_data or not captured_data.get('Data', {}).get('AllChannels'):
+            raise ValueError("API yanıtı ağ trafiğinden yakalanamadı.")
         
-        if not data or not data.get('IsSucceeded') or not data.get('Data', {}).get('AllChannels'):
-            raise ValueError(f"API'den geçerli veri alınamadı. Yanıt: {str(data)[:150]}")
-        
+        data = captured_data
         print("✅ Kanallar başarıyla alındı, M3U oluşturuluyor...")
         
         m3u_lines = ["#EXTM3U"]
